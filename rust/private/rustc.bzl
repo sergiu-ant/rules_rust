@@ -1373,6 +1373,8 @@ def rustc_compile_action(
         lint_files = lint_files,
         stamp = stamp,
         experimental_use_cc_common_link = experimental_use_cc_common_link,
+        # Proc-macros need to wait for full .rlib outputs, not just .rmeta
+        force_depend_on_objects = crate_info.type == "proc-macro",
     )
 
     # The types of rustc outputs to emit.
@@ -1422,6 +1424,8 @@ def rustc_compile_action(
         use_json_output = bool(build_metadata) or bool(rustc_output) or bool(rustc_rmeta_output),
         skip_expanding_rustc_env = skip_expanding_rustc_env,
         require_explicit_unstable_features = require_explicit_unstable_features,
+        # Proc-macros need full .rlib files from deps, not just .rmeta metadata
+        force_depend_on_objects = crate_info.type == "proc-macro",
     )
 
     args_metadata = None

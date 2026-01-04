@@ -31,6 +31,7 @@ load(
 )
 load(
     ":rustc.bzl",
+    "IsProcMacroDepInfo",
     "collect_extra_rustc_flags",
     "is_no_std",
     "rustc_compile_action",
@@ -199,11 +200,20 @@ def _rust_library_common(ctx, crate_type):
     rust_metadata = None
     rustc_rmeta_output = None
     metadata_supports_pipelining = False
+
+    # Check if we're a proc-macro dep - if so, disable pipelining because:
+    # proc-macros need .rlib files built without referencing .rmeta from deps
+    is_proc_macro_dep = False
+    if hasattr(ctx.attr, "_is_proc_macro_dep"):
+        is_proc_macro_dep = ctx.attr._is_proc_macro_dep[IsProcMacroDepInfo].is_proc_macro_dep
+
+    effective_disable_pipelining = getattr(ctx.attr, "disable_pipelining", False) or is_proc_macro_dep
+
     if can_build_metadata(
         toolchain,
         ctx,
         crate_type,
-        disable_pipelining = getattr(ctx.attr, "disable_pipelining", False),
+        disable_pipelining = effective_disable_pipelining,
     ):
         rust_metadata = ctx.actions.declare_file(
             paths.replace_extension(rust_lib_name, ".rmeta"),
@@ -212,7 +222,7 @@ def _rust_library_common(ctx, crate_type):
         rustc_rmeta_output = generate_output_diagnostics(ctx, rust_metadata)
         metadata_supports_pipelining = (
             can_use_metadata_for_pipelining(toolchain, crate_type) and
-            not ctx.attr.disable_pipelining
+            not effective_disable_pipelining
         )
 
     deps = transform_deps(ctx.attr.deps)
@@ -1103,14 +1113,28 @@ rust_shared_library = rule(
 )
 
 def _proc_macro_dep_transition_impl(settings, _attr):
-    if settings["//rust/private:is_proc_macro_dep_enabled"]:
-        return {"//rust/private:is_proc_macro_dep": True}
-    else:
+    if not settings["//rust/private:is_proc_macro_dep_enabled"]:
         return []
+    # Disable pipelining for proc-macro deps because:
+    # 1. Proc-macros need full .rlib files, not .rmeta
+    # 2. When deps are built with pipelining, their internal metadata references
+    #    .rmeta files from their transitive deps
+    # 3. When the proc-macro tries to load an rlib, rustc can't verify the
+    #    metadata because the referenced .rmeta files don't exist
+    return {
+        "//rust/private:is_proc_macro_dep": True,
+        "@rules_rust//rust/settings:pipelined_compilation": False,
+    }
 
 _proc_macro_dep_transition = transition(
-    inputs = ["//rust/private:is_proc_macro_dep_enabled"],
-    outputs = ["//rust/private:is_proc_macro_dep"],
+    inputs = [
+        "//rust/private:is_proc_macro_dep_enabled",
+        "@rules_rust//rust/settings:pipelined_compilation",
+    ],
+    outputs = [
+        "//rust/private:is_proc_macro_dep",
+        "@rules_rust//rust/settings:pipelined_compilation",
+    ],
     implementation = _proc_macro_dep_transition_impl,
 )
 
